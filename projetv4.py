@@ -4,19 +4,12 @@ Created on Fri Dec 27 17:10:17 2024
 
 @authors: anonyme1, anonyme2, anonyme3
 """
-import feedparser, requests, re, pandas as pd, smtplib, os
+import feedparser, requests, re, pandas as pd, smtplib
 from datetime import datetime, timedelta
 from time import sleep
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
-
-# Chemin absolu du nouveau répertoire de travail
-# new_working_directory = #attention veuillez indiquer le chemin d'accès vers l'endroit où est téléchargé le fichier si le programme ne trouve pas les différents csv
-# os.chdir(new_working_directory)
-
-# # Vérifier le changement
-# print("Nouveau répertoire courant :", os.getcwd())
 
 def recuperer_donnees(link):
     """
@@ -99,24 +92,6 @@ def recuperer_feed(feed_recupere, url, feed):
     print(f"\nEtape 1 effectuée. {len(feed_recupere)} entrées récupérées.")
     return feed_recupere, feed
     
-
-def extraction_cves_bis(rss_feed):
-    print('\n\nEtape 2 : Extraction des CVE en cours...')
-    all_CVE = []
-    for entry in rss_feed :
-        try :
-            data = recuperer_donnees(entry.link +'json/')            
-            # ref_cves = list(data["cves"])
-            
-            cve_pattern = r"CVE-\d{4}-\d{4,7}"
-            cve_list = list(set(re.findall(cve_pattern, str(data))))
-            
-            all_CVE.append(cve_list)
-        except Exception as e :
-            print(f"Erreur d'accès au lien JSON de l'entrée : {e}")
-    print(f"\nEtape 2 effectuée. {sum([len(x) for x in all_CVE])} CVE extraites.")
-    return all_CVE
-
 def extraction_cves(rss_feed):
     """
     Extrait les identifiants CVE de chaque alerte et avis contenus dans les flux RSS récupérés
@@ -127,49 +102,50 @@ def extraction_cves(rss_feed):
         rss_feed (list) : liste d'entrées (avis ou alertes ANSSI)
     
     Retourne :
-        all_CVE (list) : liste pour stocker les listes de CVE extraites par entrée
+        cves (list) : liste pour stocker les listes de CVE extraites par entrée
     """
     print('\n\nEtape 2 : Extraction des CVE en cours...')
-    all_CVE = []
+    cves = []
     for entry in rss_feed :
         try :
             data = recuperer_donnees(entry.link +'json/')            
             ref_cves=list(data["cves"])
             #attention il s’agit d’une liste des dictionnaires avec name et url comme clés
-            print( "CVE référencés ", ref_cves)
+            #print( "CVE référencés ", ref_cves)
 
             cve_pattern = r"CVE-\d{4}-\d{4,7}"
             cve_list = list(set(re.findall(cve_pattern, str(data))))
             
-            all_CVE.append(cve_list)
+            cves.append(cve_list)
         except Exception as e :
             print(f"Erreur d'accès au lien JSON de l'entrée : {e}")
     
-    print(f"\nEtape 2 effectuée. {sum([len(x) for x in all_CVE])} CVE extraites.")
-    return all_CVE
+    print(f"\nEtape 2 effectuée. {sum([len(x) for x in cves])} CVE extraites.")
+    return cves
 
 def avis_email(df):
     """
-    Construction et envoie d'emails contenant les avis et alertes critiques datant de moins de deux semaines
+    Construction et envoie d'emails d'avis et/ou d'alertes en fonction des préférences utilisateurs datant de moins de deux semaines
     Affiche également le nombre d'emails correctement envoyés (et le nombre d'échecs)
     
     
     Paramètres :
         df (DataFrame) : données des CVE consolidées utilisées pour l'envoi de mail et la personnalisation du corps de ce dernier
-        to_email (list) : liste d'adresses email des destinataires
     """
     users = pd.read_csv('data\\users.csv', sep=',')
     
-    intervalle = datetime.now() - timedelta(weeks=2)
+    intervalle = datetime.now() - timedelta(weeks=3)
+    print(f"Date minimum pour envoi de mail : {intervalle}")
     entrees_recentes = df[(pd.to_datetime(df['Date']) >= intervalle)]
-    print(len(entrees_recentes))
+    print(f"Nbr d'avis/alertes correspondant à cet intervalle : {len(entrees_recentes)}")
+    
     echec = 0
     reussite = 0
 
     for _, line in entrees_recentes.iterrows():
         #Création d'un email perso en fonction des caractèristiques de la CVE et de son entrée associée
         type_entree = "nulle"
-        if line['Sévérité'] == 'CRITICAL' :
+        if line['Sévérité'] == 'CRITICAL':
             type_entree = "critique"
         elif line['Sévérité'] == 'HIGH':
             type_entree = "haute"
@@ -182,7 +158,6 @@ def avis_email(df):
         
         subject = f"[URGENT ANSSI] {line['Référence ANSSI']} - {line['Titre ANSSI']}"
         body_html = f"""
-        
         <html>
         <body style="font-family: Arial, sans-serif; color: #000000;">
             <p>Bonjour,</p>
@@ -218,16 +193,17 @@ def avis_email(df):
         </html>
         """
         
-        print(line['Produit'], line['Sévérité'])
         for _, user in users.iterrows():
             user_mail = user['mail']
+            print("\nMail : "+user_mail)
             user_logiciels = user['logiciels'].split('-')
             user_preference = user['preference'].split('-')
+            
             if "ALL" in user_preference :
                 user_preference = ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
-            # Vérification que le logiciel et la sévérité correspondent
+            
             if any(log in line['Produit'] for log in user_logiciels) and any(sev in line['Sévérité'] for sev in user_preference):
-                print("in the if")
+                print("Envoi de mail en cours")
                 # Envoi de l'email
                 boolean = send_email(user_mail, subject, body_html, line['CVE'])
                 if boolean:
@@ -235,7 +211,7 @@ def avis_email(df):
                 else:
                     echec += 1
 
-    print(f"{reussite} mails envoyés - {echec} échecs")
+    print(f"\n\n{reussite} mails envoyés - {echec} échecs")
 
 def send_email(to_email, subject, body_html, cve_id):
     """
@@ -288,6 +264,17 @@ def send_email(to_email, subject, body_html, cve_id):
         return False
 
 def enrichissement_cve(all_CVE, df_initial):
+    """
+    Extraction des différentes données liées à chaque CVE si non existante dans le dataframe "df_initial" ou non à jour
+    Mise à jour du dataframe "df_initial"
+
+    Paramètres :
+        all_CVE (list) : Liste contenant l'ensemble des CVEs de chaque alerte et avis référencés sur le site de l'ANSSI
+        df_initial (DataFrame): DataFrame contenant des avis et alertes non mis à jour depuis le dernier lancement du programme
+
+    Retourne :
+        df_initial (DataFrame): DataFrame contenant l'ensemble des avis et alertes à jour sur le site de l'ANSSI
+    """
     print("\n\nEtape 3 : Enrichissement des CVE...")
     
     for m in range(len(all_CVE)):
@@ -457,7 +444,6 @@ def enrichissement_cve(all_CVE, df_initial):
     return df_initial
 
 
-#%%
 print("Lancement du programme")
 start = datetime.now()
 
@@ -468,29 +454,24 @@ url = ["https://www.cert.ssi.gouv.fr/alerte/feed","https://www.cert.ssi.gouv.fr/
 rss_feed = []
 
 #Etape 1
-print("RSS Feed avant récupération:", rss_feed)
 rss_feed, feed = recuperer_feed(rss_feed, url, feed)
-print("RSS Feed après récupération:", rss_feed)
-print("DataFrame Feed:", feed.head())
-
+print("\nDataFrame Feed:", feed.head())
 
 feed.to_csv('data\\feed.csv', header = True, index = False, mode = 'w', encoding='utf-8', sep = '-')
 
 #Etape 2
 all_CVE = extraction_cves(rss_feed)
-all_CVE_bis = extraction_cves_bis(rss_feed)
 
+#%%
 #Etapes 3 et 4
 df_initial = enrichissement_cve(all_CVE, df_initial)
 df_initial.to_csv('data\\donnees_cybersec.csv', header = True, index = False, mode = 'w', encoding='utf-8')
 
 print("\nConsolidation des données effectuée et exportée dans 'data\\donnees_cybersec.csv'.")
-#%%
+
 #Etape 6
+print(df_initial)
 avis_email(df_initial)
 
 print('Fin du programme')
 print(f"Programme exécuté en {chronometre(start, datetime.now())}")
-
-#%%
-print(sum([len(x) for x in all_CVE]))
